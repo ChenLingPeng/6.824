@@ -81,6 +81,7 @@ func RunWorker(MasterAddress string, me string,
 		conn, err := wk.l.Accept()
 		if err == nil {
 			wk.nRPC -= 1
+			// run command send from master like DoJob or Shutdown
 			go rpcs.ServeConn(conn)
 			wk.nJobs += 1
 		} else {

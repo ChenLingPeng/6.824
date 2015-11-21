@@ -135,8 +135,11 @@ func cleanup(mr *MapReduce) {
 
 func TestBasic(t *testing.T) {
 	fmt.Printf("Test: Basic mapreduce ...\n")
+	// run a mr server, connect using unix:// protocol
 	mr := setup()
 	for i := 0; i < 2; i++ {
+		// register to master & tell the master the worker's unix address(unix://)
+		// send to registerChannel
 		go RunWorker(mr.MasterAddress, port("worker"+strconv.Itoa(i)),
 			MapFunc, ReduceFunc, -1)
 	}
