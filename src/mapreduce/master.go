@@ -33,23 +33,27 @@ func (mr *MapReduce) RunMaster() *list.List {
 	reduceChan := make(chan int)
 	for i := 0; i < mr.nMap; i++ {
 		go func(mapN int) {
-			var worker string
-			success := false
-			select {
-			case worker = <-mr.registerChannel:
-				mr.Workers[worker] = &WorkerInfo{address: worker}
-				jobArgs := DoJobArgs{File: mr.file, Operation: Map, JobNumber: mapN, NumOtherPhase: mr.nReduce}
-				var reply DoJobReply
-				success = call(worker, "Worker.DoJob", jobArgs, &reply)
-			case worker = <-idleWorder:
-				jobArgs := DoJobArgs{File: mr.file, Operation: Map, JobNumber: mapN, NumOtherPhase: mr.nReduce}
-				var reply DoJobReply
-				success = call(worker, "Worker.DoJob", jobArgs, &reply)
-			}
-			if success {
-				mapChan <- mapN
-				idleWorder <- worker
-				return
+			for {
+				var worker string
+				success := false
+				select {
+				case worker = <-mr.registerChannel:
+					mr.Workers[worker] = &WorkerInfo{address: worker}
+					jobArgs := DoJobArgs{File: mr.file, Operation: Map, JobNumber: mapN, NumOtherPhase: mr.nReduce}
+					var reply DoJobReply
+					success = call(worker, "Worker.DoJob", jobArgs, &reply)
+				case worker = <-idleWorder:
+					jobArgs := DoJobArgs{File: mr.file, Operation: Map, JobNumber: mapN, NumOtherPhase: mr.nReduce}
+					var reply DoJobReply
+					success = call(worker, "Worker.DoJob", jobArgs, &reply)
+				}
+				if success {
+					mapChan <- mapN
+					idleWorder <- worker
+					return
+				} else {
+					delete(mr.Workers, worker)
+				}
 			}
 		}(i)
 	}
@@ -58,23 +62,27 @@ func (mr *MapReduce) RunMaster() *list.List {
 	}
 	for i := 0; i < mr.nReduce; i++ {
 		go func(reduceN int) {
-			var worker string
-			success := false
-			select {
-			case worker = <-mr.registerChannel:
-				mr.Workers[worker] = &WorkerInfo{address: worker}
-				jobArgs := DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: reduceN, NumOtherPhase: mr.nMap}
-				var reply DoJobReply
-				success = call(worker, "Worker.DoJob", jobArgs, &reply)
-			case worker = <-idleWorder:
-				jobArgs := DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: reduceN, NumOtherPhase: mr.nMap}
-				var reply DoJobReply
-				success = call(worker, "Worker.DoJob", jobArgs, &reply)
-			}
-			if success {
-				reduceChan <- reduceN
-				idleWorder <- worker
-				return
+			for {
+				var worker string
+				success := false
+				select {
+				case worker = <-mr.registerChannel:
+					mr.Workers[worker] = &WorkerInfo{address: worker}
+					jobArgs := DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: reduceN, NumOtherPhase: mr.nMap}
+					var reply DoJobReply
+					success = call(worker, "Worker.DoJob", jobArgs, &reply)
+				case worker = <-idleWorder:
+					jobArgs := DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: reduceN, NumOtherPhase: mr.nMap}
+					var reply DoJobReply
+					success = call(worker, "Worker.DoJob", jobArgs, &reply)
+				}
+				if success {
+					reduceChan <- reduceN
+					idleWorder <- worker
+					return
+				} else {
+					delete(mr.Workers, worker)
+				}
 			}
 		}(i)
 	}
@@ -82,10 +90,10 @@ func (mr *MapReduce) RunMaster() *list.List {
 	for i := 0; i < mr.nReduce; i++ {
 		<-reduceChan
 	}
+	fmt.Println("reduce done with living worker", len(mr.Workers))
 	// consume idle workers...
 	for i := 0; i < len(mr.Workers); i++ {
-		<-idleWorder
+		fmt.Println(<-idleWorder)
 	}
-
 	return mr.KillWorkers()
 }

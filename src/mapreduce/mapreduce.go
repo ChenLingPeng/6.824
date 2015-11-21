@@ -207,7 +207,7 @@ func DoMap(JobNumber int, fileName string,
 		log.Fatal("DoMap: ", err)
 	}
 	size := fi.Size()
-	fmt.Printf("DoMap: read split %s %d\n", name, size)
+	// fmt.Printf("DoMap: read split %s %d\n", name, size)
 	b := make([]byte, size)
 	_, err = file.Read(b)
 	if err != nil {
@@ -246,7 +246,7 @@ func DoReduce(job int, fileName string, nmap int,
 	kvs := make(map[string]*list.List)
 	for i := 0; i < nmap; i++ {
 		name := ReduceName(fileName, i, job)
-		fmt.Printf("DoReduce: read %s\n", name)
+		// fmt.Printf("DoReduce: read %s\n", name)
 		file, err := os.Open(name)
 		if err != nil {
 			log.Fatal("DoReduce: ", err)
@@ -291,7 +291,7 @@ func (mr *MapReduce) Merge() {
 	kvs := make(map[string]string)
 	for i := 0; i < mr.nReduce; i++ {
 		p := MergeName(mr.file, i)
-		fmt.Printf("Merge: read %s\n", p)
+		// fmt.Printf("Merge: read %s\n", p)
 		file, err := os.Open(p)
 		if err != nil {
 			log.Fatal("Merge: ", err)
