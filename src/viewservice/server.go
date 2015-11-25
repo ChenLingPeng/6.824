@@ -16,16 +16,69 @@ type ViewServer struct {
 	rpccount int32 // for testing
 	me       string
 
-
 	// Your declarations here.
+	view      View
+	ack       bool // change to false when view change and to true if primary
+	pingCount map[string]uint
 }
 
 //
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
-
 	// Your code here.
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	vs.pingCount[args.Me] = 0
+	vs.rpccount++
+	if vs.view.Viewnum == 0 {
+		// when the viewservice first starts, it should accept any server at all as the first primary
+		vs.view.Primary = args.Me
+		vs.view.Viewnum = 1
+		vs.ack = false
+	} else {
+		if vs.view.Primary == args.Me {
+			// from primary
+			if args.Viewnum == 0 {
+				// primary crash & re-start
+				if vs.view.Backup == "" {
+					// no backup, continue as primary. lucky boy...
+					vs.view.Viewnum++
+					vs.ack = false
+				} else {
+					vs.view.Primary = vs.view.Backup
+					vs.view.Backup = args.Me
+					vs.view.Viewnum++
+					vs.ack = false
+				}
+			} else if args.Viewnum == vs.view.Viewnum {
+				// ack this view
+				// if not equal, should re-ack for new view
+				vs.ack = true
+			}
+		} else {
+			if vs.ack == false {
+				// change nothing
+				reply.View = vs.view
+				return nil
+			}
+			if vs.view.Backup == "" {
+				vs.view.Backup = args.Me
+				vs.view.Viewnum++
+				vs.ack = false
+			} else if vs.view.Primary == "" {
+				// will this happen?
+				fmt.Println("something happended: the primary is missing and backup is not empty")
+				if args.Me == vs.view.Backup && args.Viewnum == vs.view.Viewnum {
+					// the backup will be promoted as primary since it has the fresh view
+					vs.view.Primary = vs.view.Backup
+					vs.view.Backup = ""
+					vs.ack = false
+				}
+			}
+		}
+	}
+	reply.View = vs.view
 
 	return nil
 }
@@ -36,10 +89,10 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
+	reply.View = vs.view
 
 	return nil
 }
-
 
 //
 // tick() is called once per PingInterval; it should notice
@@ -49,6 +102,35 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 func (vs *ViewServer) tick() {
 
 	// Your code here.
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	for key, _ := range vs.pingCount {
+		if key != vs.view.Primary && key != vs.view.Backup {
+			delete(vs.pingCount, key) // delete when iterate?
+		}
+	}
+	viewChange := false
+	if vs.view.Backup != "" {
+		vs.pingCount[vs.view.Backup] = vs.pingCount[vs.view.Backup] + 1
+		if vs.ack && vs.pingCount[vs.view.Backup] > DeadPings {
+			// backup is dead now
+			vs.view.Backup = ""
+			viewChange = true // view changed
+		}
+	}
+	if vs.view.Primary != "" {
+		vs.pingCount[vs.view.Primary] = vs.pingCount[vs.view.Primary] + 1
+		if vs.ack && vs.pingCount[vs.view.Primary] > DeadPings {
+			// primary is dead now
+			vs.view.Primary = vs.view.Backup
+			vs.view.Backup = ""
+			viewChange = true // view changed
+		}
+	}
+	if viewChange {
+		vs.view.Viewnum++
+		vs.ack = false
+	}
 }
 
 //
@@ -77,6 +159,7 @@ func StartServer(me string) *ViewServer {
 	vs := new(ViewServer)
 	vs.me = me
 	// Your vs.* initializations here.
+	vs.pingCount = make(map[string]uint)
 
 	// tell net/rpc about our RPC server and handlers.
 	rpcs := rpc.NewServer()
