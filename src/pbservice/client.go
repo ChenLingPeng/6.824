@@ -4,13 +4,17 @@ import "viewservice"
 import "net/rpc"
 import "fmt"
 
+// import "time"
+
 import "crypto/rand"
 import "math/big"
-
 
 type Clerk struct {
 	vs *viewservice.Clerk
 	// Your declarations here
+	primary string
+	me      string
+	seq     int64
 }
 
 // this may come in handy.
@@ -25,10 +29,10 @@ func MakeClerk(vshost string, me string) *Clerk {
 	ck := new(Clerk)
 	ck.vs = viewservice.MakeClerk(me, vshost)
 	// Your ck.* initializations here
+	ck.me = fmt.Sprintf("%s%d", me, nrand())
 
 	return ck
 }
-
 
 //
 // call() sends an RPC to the rpcname handler on server srv
@@ -60,7 +64,7 @@ func call(srv string, rpcname string,
 		return true
 	}
 
-	fmt.Println(err)
+	// fmt.Println(err)
 	return false
 }
 
@@ -75,6 +79,22 @@ func (ck *Clerk) Get(key string) string {
 
 	// Your code here.
 
+	if ck.primary == "" {
+		if view, success := ck.vs.Get(); success && view.Primary != "" {
+			ck.primary = view.Primary
+		}
+	}
+	for {
+		args := GetArgs{key}
+		var reply GetReply
+		if success := call(ck.primary, "PBServer.Get", args, &reply); success && reply.Err == "" {
+			return reply.Value
+		}
+		// time.Sleep(viewservice.PingInterval)
+		if view, success := ck.vs.Get(); success && view.Primary != "" {
+			ck.primary = view.Primary
+		}
+	}
 	return "???"
 }
 
@@ -84,6 +104,24 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	// Your code here.
+	ck.seq++
+	seq := ck.seq
+	if ck.primary == "" {
+		if view, success := ck.vs.Get(); success && view.Primary != "" {
+			ck.primary = view.Primary
+		}
+	}
+	for {
+		args := PutAppendArgs{key, value, op, ck.me, seq}
+		var reply PutAppendReply
+		if success := call(ck.primary, "PBServer.PutAppend", args, &reply); success && reply.Err == "" {
+			return
+		}
+		// time.Sleep(viewservice.PingInterval)
+		if view, success := ck.vs.Get(); success && view.Primary != "" {
+			ck.primary = view.Primary
+		}
+	}
 }
 
 //

@@ -4,6 +4,8 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongServer = "ErrWrongServer"
+	OpPut          = "Put"
+	OpAppend       = "Append"
 )
 
 type Err string
@@ -16,6 +18,9 @@ type PutAppendArgs struct {
 
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Op  string
+	Me  string
+	Seq int64 // for duplicate case
 }
 
 type PutAppendReply struct {
@@ -32,5 +37,16 @@ type GetReply struct {
 	Value string
 }
 
-
 // Your RPC definitions here.
+
+type PutAppendSyncArgs struct {
+	Key   string
+	Value string
+	Me    string
+	Seq   int64
+}
+
+type FlushArgs struct {
+	KV      map[string]string
+	Visited map[string]int64
+}

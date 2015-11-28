@@ -12,8 +12,6 @@ import "os"
 import "syscall"
 import "math/rand"
 
-
-
 type PBServer struct {
 	mu         sync.Mutex
 	l          net.Listener
@@ -22,25 +20,109 @@ type PBServer struct {
 	me         string
 	vs         *viewservice.Clerk
 	// Your declarations here.
+	kvstore  map[string]string
+	visitlog map[string]int64
+	view     viewservice.View
 }
 
-
+// only service if server is primary
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
 
+	if pb.me != pb.view.Primary {
+		reply.Err = Err("not primary, now is " + pb.view.Primary + ", I'm " + pb.me)
+		return fmt.Errorf("%s", "not primary, now is "+pb.view.Primary+", I'm "+pb.me)
+	}
+	reply.Value = pb.kvstore[args.Key]
 	return nil
 }
 
-
+// only service if service is primary
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
-
 	// Your code here.
-
-
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if pb.me != pb.view.Primary {
+		reply.Err = Err("not primary, now is " + pb.view.Primary + ", I'm " + pb.me)
+		return fmt.Errorf("%s", "not primary, now is "+pb.view.Primary+", I'm "+pb.me)
+	}
+	if args.Op == OpPut {
+		syncArgs := &PutAppendSyncArgs{args.Key, args.Value, args.Me, args.Seq}
+		if err := pb.sync(syncArgs); err != nil {
+			reply.Err = Err(err.Error())
+			return err
+		}
+		pb.kvstore[args.Key] = args.Value
+	} else if args.Op == OpAppend {
+		// append itself do not fit at-most-once semantic, should handle it in server side
+		var syncArgs PutAppendSyncArgs
+		if pb.visitlog["update."+args.Me] == args.Seq {
+			syncArgs = PutAppendSyncArgs{args.Key, pb.kvstore[args.Key], args.Me, args.Seq}
+		} else {
+			syncArgs = PutAppendSyncArgs{args.Key, pb.kvstore[args.Key] + args.Value, args.Me, args.Seq}
+		}
+		if err := pb.sync(&syncArgs); err != nil {
+			reply.Err = Err(err.Error())
+			return err
+		}
+		pb.kvstore[args.Key] = syncArgs.Value
+		pb.visitlog["update."+args.Me] = args.Seq
+	} else {
+		fmt.Println("un-match/error op:", args.Op)
+	}
 	return nil
 }
 
+// put/append request will forward to here
+func (pb *PBServer) SyncFromPrimary(args *PutAppendSyncArgs, reply *PutAppendReply) error {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if pb.view.Backup != pb.me {
+		reply.Err = "not backup"
+		return fmt.Errorf("not backup")
+	}
+	pb.kvstore[args.Key] = args.Value
+	pb.visitlog["update."+args.Me] = args.Seq
+	return nil
+}
+
+func (pb *PBServer) FlushFromPrimary(args *FlushArgs, reply *PutAppendReply) error {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if pb.view.Backup != pb.me {
+		reply.Err = "not backup"
+		return fmt.Errorf("not backup")
+	}
+	pb.kvstore = args.KV
+	pb.visitlog = args.Visited
+	return nil
+}
+
+func (pb *PBServer) sync(args *PutAppendSyncArgs) error {
+	if pb.view.Backup == "" {
+		return nil
+	}
+	var reply PutAppendReply
+	ok := call(pb.view.Backup, "PBServer.SyncFromPrimary", args, &reply)
+	if ok && reply.Err == "" {
+		return nil
+	}
+	return fmt.Errorf("sync err: %s", reply.Err)
+}
+
+// TODO: flush could also fail? shouldn't handle it?
+func (pb *PBServer) flush(backup string) error {
+	var reply PutAppendReply
+	args := FlushArgs{pb.kvstore, pb.visitlog}
+	ok := call(backup, "PBServer.FlushFromPrimary", args, &reply)
+	if ok && reply.Err == "" {
+		return nil
+	}
+	return fmt.Errorf("flush error: %s", reply.Err)
+}
 
 //
 // ping the viewserver periodically.
@@ -48,9 +130,23 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 //   transition to new view.
 //   manage transfer of state from primary to new backup.
 //
+// sync backup kv store.
 func (pb *PBServer) tick() {
 
 	// Your code here.
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	view, err := pb.vs.Ping(pb.view.Viewnum)
+	if err == nil {
+		// pb is now the primary && backup have been changed
+		if view.Backup != "" && pb.me == pb.view.Primary {
+			pb.flush(view.Backup)
+		}
+	} else {
+		// fmt.Println("view err!!!", err, pb.me)
+	}
+	// update even if view error. put myself into restarting status
+	pb.view = view
 }
 
 // tell the server to shut itself down.
@@ -78,12 +174,13 @@ func (pb *PBServer) isunreliable() bool {
 	return atomic.LoadInt32(&pb.unreliable) != 0
 }
 
-
 func StartServer(vshost string, me string) *PBServer {
 	pb := new(PBServer)
 	pb.me = me
 	pb.vs = viewservice.MakeClerk(me, vshost)
 	// Your pb.* initializations here.
+	pb.kvstore = make(map[string]string)
+	pb.visitlog = make(map[string]int64)
 
 	rpcs := rpc.NewServer()
 	rpcs.Register(pb)
