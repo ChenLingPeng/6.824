@@ -114,12 +114,33 @@ func (pb *PBServer) sync(args *PutAppendSyncArgs) error {
 }
 
 // TODO: flush could also fail? shouldn't handle it?
-func (pb *PBServer) flush(backup string) error {
+func (pb *PBServer) flush2(backup string) error {
 	var reply PutAppendReply
 	args := FlushArgs{pb.kvstore, pb.visitlog}
 	ok := call(backup, "PBServer.FlushFromPrimary", args, &reply)
 	if ok && reply.Err == "" {
 		return nil
+	}
+	return fmt.Errorf("flush error: %s", reply.Err)
+}
+
+func (pb *PBServer) flush(view viewservice.View) error {
+	var reply PutAppendReply
+	args := FlushArgs{pb.kvstore, pb.visitlog}
+	cnt := 0
+	for {
+		ok := call(view.Backup, "PBServer.FlushFromPrimary", args, &reply)
+		if ok && reply.Err == "" {
+			return nil
+		}
+		newview, _ := pb.vs.Get()
+		if newview.Viewnum != view.Viewnum {
+			// if view changed, tick() will know
+			break
+		} else {
+			cnt++
+			fmt.Println("will flush again", cnt)
+		}
 	}
 	return fmt.Errorf("flush error: %s", reply.Err)
 }
@@ -139,8 +160,8 @@ func (pb *PBServer) tick() {
 	view, err := pb.vs.Ping(pb.view.Viewnum)
 	if err == nil {
 		// pb is now the primary && backup have been changed
-		if view.Backup != "" && pb.me == pb.view.Primary {
-			pb.flush(view.Backup)
+		if view.Backup != "" && pb.me == pb.view.Primary && view.Viewnum != pb.view.Viewnum {
+			pb.flush(view)
 		}
 	} else {
 		// fmt.Println("view err!!!", err, pb.me)
